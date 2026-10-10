@@ -1,0 +1,7 @@
+numpy>=2.0
+scipy>=1.13
+requests>=2.32
+PyYAML>=6.0
+anthropic>=0.60
+mcp>=1.10,<2
+pytest>=8.0

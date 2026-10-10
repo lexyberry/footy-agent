@@ -1,0 +1,47 @@
+# Footy Agent configuration
+leagues:
+  - {id: 39,  name: Premier League}
+  - {id: 140, name: La Liga}
+  - {id: 135, name: Serie A}
+  - {id: 78,  name: Bundesliga}
+  - {id: 61,  name: Ligue 1}
+  - {id: 106, name: Ekstraklasa}
+
+# Seasons to train on (API-Football uses the start year, e.g. 2026 = 2026/27)
+history_seasons: [2024, 2025, 2026]
+current_season: 2026
+
+model:
+  dc_half_life_days: 365        # time-decay for Dixon-Coles weights
+  dc_l2: 0.05                   # shrinkage for teams with little data
+  elo_k: 20
+  elo_home_adv: 60
+  elo_season_regression: 0.33   # pull ratings toward mean between seasons
+  blend_weight_dc: 0.6          # 1X2 blend: DC vs Elo-logit (tune via backtest)
+  max_goals: 10
+
+claude:
+  enabled: true
+  model: claude-sonnet-5-5
+  max_lambda_change: 0.15       # each team's expected goals may move at most ±15%
+  max_prob_shift_pp: 8          # no 1X2 outcome may move more than 8 percentage points
+
+market:
+  bookmaker: Superbet           # resolved via /odds/bookmakers; falls back if not listed
+  fallback_bookmakers: [Pinnacle, Bet365, Unibet]
+  market_shrink: 0.25           # pull model 25% toward de-vigged market before value check
+  min_edge: 0.04                # min expected value to flag a bet (4%)
+  suspicious_edge: 0.12         # above this, flag "verify" (stale odds / missing news) and stake 0
+  min_prob: 0.15                # ignore long shots below this model probability
+  max_odds: 6.0
+  kelly_fraction: 0.25
+  max_stake_pct: 2.0            # hard cap per bet, % of bankroll
+
+schedule:
+  morning_run: "08:30"          # Europe/Warsaw: base predictions + odds snapshot
+  lineup_window_min: 75         # re-run context layer once lineups are out
+  poll_every_min: 15
+
+timezone: Europe/Warsaw
+db_path: data/footy.db
+reports_dir: reports

@@ -1,0 +1,12 @@
+# Local development: same single service as Railway
+services:
+  agent:
+    build: .
+    env_file: .env
+    ports:
+      - "127.0.0.1:8765:8765"
+    volumes:
+      - ./data:/app/data
+      - ./reports:/app/reports
+      - ./config.yaml:/app/config.yaml:ro
+    restart: unless-stopped

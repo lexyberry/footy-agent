@@ -30,7 +30,7 @@ claude:
 market:
   bookmaker: Superbet           # resolved via /odds/bookmakers; falls back if not listed
   fallback_bookmakers: [Pinnacle, Bet365, Unibet]
-  market_shrink: 0.25           # pull model 25% toward de-vigged market before value check
+  market_shrink: 0.5            # pull model 50% toward de-vigged market before value check (lower once CLV proves an edge)
   min_edge: 0.04                # min expected value to flag a bet (4%)
   suspicious_edge: 0.12         # above this, flag "verify" (stale odds / missing news) and stake 0
   min_prob: 0.15                # ignore long shots below this model probability

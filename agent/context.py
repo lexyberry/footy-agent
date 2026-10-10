@@ -22,7 +22,15 @@ Rules:
 - Stay within 0.85-1.15. Typical meaningful adjustments are 0.95-1.05.
 - Use only the data given. Do not invent injuries, news, or facts. If data is thin, say so
   and stay close to 1.0.
-- Do not adjust for form or table position alone — the model already has them."""
+- Do not adjust for form or table position alone — the model already has them.
+
+You also explain the prediction to a human reader:
+- "summary": 2-3 plain-English sentences on why the model's most likely outcome is what it is,
+  grounded in the "drivers" (ratings, Elo, expected goals, form, market view) and any
+  adjustment you made. Say how confident the call is (e.g. a 45% favourite is far from certain).
+- "reasons": 3-5 short bullet reasons, each tied to a specific number or fact provided.
+- If the market view disagrees strongly with the model, say so plainly in the summary.
+- Never invent statistics, players or news that are not in the data."""
 
 TOOL = {
     "name": "submit_adjustment",
@@ -36,14 +44,19 @@ TOOL = {
                             "description": "Each factor that drove an adjustment, one line each"},
             "reasoning": {"type": "string", "description": "2-4 sentences"},
             "confidence": {"type": "string", "enum": ["low", "medium", "high"]},
+            "summary": {"type": "string",
+                        "description": "2-3 sentences: why the most likely outcome was chosen"},
+            "reasons": {"type": "array", "items": {"type": "string"}, "minItems": 2, "maxItems": 5,
+                        "description": "Key reasons, each tied to a number/fact provided"},
         },
         "required": ["home_xg_multiplier", "away_xg_multiplier", "key_factors",
-                     "reasoning", "confidence"],
+                     "reasoning", "confidence", "summary", "reasons"],
     },
 }
 
 NEUTRAL = {"home_xg_multiplier": 1.0, "away_xg_multiplier": 1.0, "key_factors": [],
-           "reasoning": "No context adjustment applied.", "confidence": "low"}
+           "reasoning": "No context adjustment applied.", "confidence": "low",
+           "summary": None, "reasons": []}
 
 
 def recent_form(con, team_id, before, n=6):
@@ -52,6 +65,19 @@ def recent_form(con, team_id, before, n=6):
            WHERE (home_id=? OR away_id=?) AND status IN ('FT','AET','PEN') AND kickoff < ?
            ORDER BY kickoff DESC LIMIT ?""", (team_id, team_id, before, n)).fetchall()
     return [f"{r['kickoff'][:10]} {r['home']} {r['hg']}-{r['ag']} {r['away']}" for r in rows]
+
+
+def form_string(con, team_id, before, n=6) -> str:
+    """W/D/L for the team's last n results, newest first."""
+    rows = con.execute(
+        """SELECT home_id, home_goals hg, away_goals ag FROM fixtures
+           WHERE (home_id=? OR away_id=?) AND status IN ('FT','AET','PEN') AND kickoff < ?
+           ORDER BY kickoff DESC LIMIT ?""", (team_id, team_id, before, n)).fetchall()
+    out = []
+    for r in rows:
+        gf, ga = (r["hg"], r["ag"]) if r["home_id"] == team_id else (r["ag"], r["hg"])
+        out.append("W" if gf > ga else "D" if gf == ga else "L")
+    return "".join(out)
 
 
 def gather(api, con, fx, cfg) -> dict:
@@ -92,7 +118,7 @@ def gather(api, con, fx, cfg) -> dict:
     return ctx
 
 
-def ask_claude(ctx: dict, base_summary: dict, cfg: dict, client=None) -> dict:
+def ask_claude(ctx: dict, base_summary: dict, cfg: dict, client=None, drivers=None) -> dict:
     if not cfg["claude"]["enabled"]:
         return NEUTRAL
     if client is None:
@@ -101,7 +127,7 @@ def ask_claude(ctx: dict, base_summary: dict, cfg: dict, client=None) -> dict:
             return NEUTRAL
         import anthropic
         client = anthropic.Anthropic()
-    payload = {"context": ctx, "model_base": base_summary}
+    payload = {"context": ctx, "model_base": base_summary, "drivers": drivers or []}
     try:
         # Forced tool_choice isn't supported by every model, so use "auto" and require
         # the tool in the instructions; anything else falls back to neutral.

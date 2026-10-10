@@ -5,7 +5,7 @@ from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from . import context, engine, ingest
-from .markets import find_value
+from .markets import devig, find_value
 
 log = logging.getLogger(__name__)
 _models: dict = {}
@@ -42,13 +42,6 @@ def predict_fixture(api, con, cfg, fixture_id: int, stage="base", manual_odds=No
     base_sum = engine.summarize(base["matrix"])
 
     ctx = context.gather(api, con, fx, cfg)
-    brief = {"xg_home": round(base["lam"], 2), "xg_away": round(base["mu"], 2),
-             "p_home": _pct(base_sum["p_home"]), "p_draw": _pct(base_sum["p_draw"]),
-             "p_away": _pct(base_sum["p_away"])}
-    adj = context.ask_claude(ctx, brief, cfg, client=claude_client)
-    fin = engine.adjusted_prediction(lm, base, adj["home_xg_multiplier"],
-                                     adj["away_xg_multiplier"], cfg)
-    s = engine.summarize(fin["matrix"])
 
     if manual_odds:
         book, odds = "manual", manual_odds
@@ -56,7 +49,24 @@ def predict_fixture(api, con, cfg, fixture_id: int, stage="base", manual_odds=No
         book, odds = ingest.snapshot_odds(api, con, cfg, fixture_id)
     else:
         book, odds = ingest.latest_odds(con, fixture_id)
+
+    form_h = context.form_string(con, fx["home_id"], fx["kickoff"])
+    form_a = context.form_string(con, fx["away_id"], fx["kickoff"])
+    drv = engine.drivers(lm, fx["home_id"], fx["away_id"], base, form_h, form_a,
+                         devig(odds.get("1x2", {})) if odds else None, fx["home"], fx["away"])
+    brief = {"xg_home": round(base["lam"], 2), "xg_away": round(base["mu"], 2),
+             "p_home": _pct(base_sum["p_home"]), "p_draw": _pct(base_sum["p_draw"]),
+             "p_away": _pct(base_sum["p_away"])}
+    adj = context.ask_claude(ctx, brief, cfg, client=claude_client, drivers=drv)
+    fin = engine.adjusted_prediction(lm, base, adj["home_xg_multiplier"],
+                                     adj["away_xg_multiplier"], cfg)
+    s = engine.summarize(fin["matrix"])
     value = find_value(s["_derived"], odds, cfg) if odds else []
+
+    most = max(("home", "draw", "away"), key=lambda k: s[f"p_{k}"])
+    pick = {"home": f"{fx['home']} win", "draw": "Draw", "away": f"{fx['away']} win"}[most]
+    summary = adj.get("summary") or _template_summary(fx, s, pick, drv)
+    reasons = adj.get("reasons") or _template_reasons(fx, drv)
 
     result = {
         "fixture_id": fixture_id, "match": f"{fx['home']} vs {fx['away']}",
@@ -67,7 +77,8 @@ def predict_fixture(api, con, cfg, fixture_id: int, stage="base", manual_odds=No
                   "over25": _pct(s["p_over25"]), "btts": _pct(s["p_btts"])},
         "base_probs": {"home": _pct(base_sum["p_home"]), "draw": _pct(base_sum["p_draw"]),
                        "away": _pct(base_sum["p_away"])},
-        "most_likely": max(("home", "draw", "away"), key=lambda k: s[f"p_{k}"]),
+        "most_likely": most, "pick": pick, "summary": summary, "reasons": reasons,
+        "drivers": drv,
         "top_scores": [(sc, _pct(p)) for sc, p in s["top_scores"]],
         "context": {k: adj[k] for k in ("key_factors", "reasoning", "confidence")},
         "adjustment": {"home": fin["mult_h"], "away": fin["mult_a"],
@@ -81,10 +92,35 @@ def predict_fixture(api, con, cfg, fixture_id: int, stage="base", manual_odds=No
     return result
 
 
+def _template_summary(fx, s, pick, drv) -> str:
+    """Fallback explanation built only from model numbers (used if Claude is unavailable)."""
+    p = max(s["p_home"], s["p_draw"], s["p_away"])
+    strength = "a clear favourite" if p >= 0.6 else "a modest favourite" if p >= 0.45 else "a narrow lean"
+    xg = next(d for d in drv if d["label"] == "Expected goals")
+    text = (f"The model makes {pick} {strength} at {p*100:.0f}%, with expected goals of "
+            f"{xg['home']}–{xg['away']} ({fx['home']}–{fx['away']}). "
+            f"Most likely score: {s['top_scores'][0][0]}.")
+    mv = next((d for d in drv if d["label"] == "Market view"), None)
+    if mv:
+        text += f" {mv['note']}."
+    return text
+
+
+def _template_reasons(fx, drv) -> list[str]:
+    out = []
+    for d in drv:
+        if "note" in d:
+            out.append(d["note"])
+        elif d["label"] in ("Attack rating (league rank)", "Defence rating (league rank)", "Elo rating"):
+            out.append(f"{d['label']}: {fx['home']} {d['home']} vs {fx['away']} {d['away']}")
+    return out[:5]
+
+
 def _save(con, r, s, matrix6) -> int:
     now = ingest.now_iso()
     payload = {"base_probs": r["base_probs"], "base_xg": r["base_xg"], "odds": r["odds"],
-               "bookmaker": r["bookmaker"], "score_matrix": matrix6}
+               "bookmaker": r["bookmaker"], "score_matrix": matrix6, "pick": r["pick"],
+               "summary": r["summary"], "reasons": r["reasons"], "drivers": r["drivers"]}
     cur = con.execute(
         """INSERT INTO predictions (fixture_id, created_at, stage, p_home, p_draw, p_away,
            p_over25, p_btts, lam_home, lam_away, top_scores, adjustments, reasoning, payload)

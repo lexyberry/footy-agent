@@ -110,3 +110,42 @@ def summarize(m) -> dict:
     return {"p_home": float(d["1x2"][0]), "p_draw": float(d["1x2"][1]),
             "p_away": float(d["1x2"][2]), "p_over25": d["over25"], "p_btts": d["btts"],
             "top_scores": top_scores(m, 5), "_derived": d}
+
+
+def _ordinal(n):
+    return f"{n}{'th' if 10 <= n % 100 <= 20 else {1: 'st', 2: 'nd', 3: 'rd'}.get(n % 10, 'th')}"
+
+
+def drivers(lm: LeagueModel, home_id, away_id, base: dict, form_home: str, form_away: str,
+            odds_fair: dict | None, home: str, away: str) -> list[dict]:
+    """Factual model inputs behind a prediction (no LLM involved)."""
+    dc = lm.dc
+    att_rank = {t: r + 1 for r, t in enumerate(sorted(dc.teams, key=lambda t: -dc.attack[dc._idx[t]]))}
+    def_rank = {t: r + 1 for r, t in enumerate(sorted(dc.teams, key=lambda t: dc.defence[dc._idx[t]]))}
+
+    def att(t):
+        i = dc._idx.get(t)
+        return "n/a (new)" if i is None else f"{dc.attack[i]:+.2f} ({_ordinal(att_rank[t])})"
+
+    def de(t):
+        i = dc._idx.get(t)
+        return "n/a (new)" if i is None else f"{-dc.defence[i]:+.2f} ({_ordinal(def_rank[t])})"
+
+    rows = [
+        {"label": "Attack rating (league rank)", "home": att(home_id), "away": att(away_id)},
+        {"label": "Defence rating (league rank)", "home": de(home_id), "away": de(away_id)},
+        {"label": "Elo rating", "home": f"{lm.elo.rating(home_id):.0f}", "away": f"{lm.elo.rating(away_id):.0f}"},
+        {"label": "Expected goals", "home": f"{base['lam']:.2f}", "away": f"{base['mu']:.2f}"},
+        {"label": "Form (last 6, newest first)", "home": form_home or "–", "away": form_away or "–"},
+        {"label": "Top-flight matches in model", "home": str(dc.n_matches.get(home_id, 0)),
+         "away": str(dc.n_matches.get(away_id, 0))},
+    ]
+    if odds_fair and len(odds_fair) == 3:
+        p = base["p_blend"]
+        fav = max(range(3), key=lambda k: p[k])
+        lab = [f"{home} win", "Draw", f"{away} win"][fav]
+        mk = [odds_fair.get("H"), odds_fair.get("D"), odds_fair.get("A")][fav]
+        if mk:
+            rows.append({"label": "Market view",
+                         "note": f"Market has {lab} at {mk*100:.0f}% vs model {p[fav]*100:.0f}%"})
+    return rows

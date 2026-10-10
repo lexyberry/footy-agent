@@ -61,10 +61,13 @@ def test_sync_payload_shape(setup, monkeypatch):  # noqa: F811
     assert len(p["score_matrix"]) == 6 and len(p["score_matrix"][0]) == 6
     assert 0 < p["top_scores"][0][1] < 1
     assert p["key_factors"] == ["Star Striker out (hamstring)"]
+    assert p["pick"] and p["summary"] and p["reasons"] and p["drivers"]
     f = next(c for c in calls if c["table"] == "fixtures")["rows"][0]
     assert f["league_name"] == "Sim League"
     b = next(c for c in calls if c["table"] == "bets")["rows"][0]
     assert isinstance(b["verify"], bool)
+    sb = next(c for c in calls if c["table"] == "scoreboard_snapshots")["rows"][0]["data"]
+    assert "backtest" not in sb  # none stored yet
     json.dumps(calls)  # everything serialisable
     assert sent["odds_snapshots"] > 0
     # second push sends no duplicate odds

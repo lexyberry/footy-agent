@@ -72,5 +72,19 @@ def model_scoreboard() -> dict:
     return evaluate.scoreboard(con)
 
 
+@mcp.tool()
+def backtest_results(rerun: bool = False) -> dict:
+    """Out-of-sample backtest per league (log-loss/accuracy for baseline, Dixon-Coles, Elo and
+    the blend, plus the best blend weight). rerun=True recomputes it (takes a minute or two)."""
+    import json
+    from . import backtest
+    _, con, cfg = _deps()
+    if rerun:
+        res = backtest.run_all(con, cfg, "2025-08-01", date.today().isoformat())
+        backtest.store(con, res)
+    row = con.execute("SELECT value FROM sync_state WHERE key='backtest'").fetchone()
+    return json.loads(row["value"]) if row else {"error": "no backtest stored yet"}
+
+
 if __name__ == "__main__":
     mcp.run(transport="streamable-http" if os.environ.get("MCP_TRANSPORT") == "http" else "stdio")

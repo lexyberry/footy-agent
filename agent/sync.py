@@ -70,7 +70,9 @@ def build_rows(con, cfg, since_days=14) -> dict:
             "score_matrix": pay.get("score_matrix"),
             "key_factors": ctx.get("key_factors", []), "reasoning": ctx.get("reasoning"),
             "confidence": ctx.get("confidence"),
-            "bookmaker": pay.get("bookmaker"), "odds": pay.get("odds", {})})
+            "bookmaker": pay.get("bookmaker"), "odds": pay.get("odds", {}),
+            "pick": pay.get("pick"), "summary": pay.get("summary"),
+            "reasons": pay.get("reasons", []), "drivers": pay.get("drivers", [])})
     for b in con.execute("SELECT * FROM bets WHERE created_at >= ?", (cutoff,)):
         out["bets"].append({k: b[k] for k in (
             "id", "prediction_id", "fixture_id", "created_at", "market", "selection", "price",
@@ -92,7 +94,11 @@ def push(con, cfg, post=None, include_scoreboard=False) -> dict:
         url, json=body, headers={"x-ingest-secret": secret}, timeout=30))
     rows = build_rows(con, cfg)
     if include_scoreboard:
-        rows["scoreboard_snapshots"] = [{"data": scoreboard(con)}]
+        data = scoreboard(con)
+        bt = _state(con, "backtest")
+        if bt:
+            data["backtest"] = json.loads(bt)
+        rows["scoreboard_snapshots"] = [{"data": data}]
     sent = {}
     # order matters: fixtures before rows that reference them
     for table in ("fixtures", "predictions", "bets", "odds_snapshots", "scoreboard_snapshots"):

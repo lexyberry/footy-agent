@@ -50,6 +50,8 @@ def render(preds: list[dict], cfg: dict, title: str) -> str:
 <div class="bar"><span style="width:{pr['home']}%"></span><span style="width:{pr['draw']}%"></span><span style="width:{pr['away']}%"></span></div>
 <div class="row"><span>1 {pr['home']}%</span><span>X {pr['draw']}%</span><span>2 {pr['away']}%</span></div>
 <div class="row mut"><span>O2.5 {pr['over25']}%</span><span>BTTS {pr['btts']}%</span><span>Likely: {p['top_scores'][0][0]}</span></div>
+<p style="margin:8px 0 0;font-size:14px"><b>Pick: {html.escape(p.get('pick') or '')}</b></p>
+<p class="mut" style="margin:4px 0 0">{html.escape(p.get('summary') or '')}</p>
 {f'<ul>{factors}</ul>' if factors else ''}{vbs}</div>""")
     n_vb = sum(len(p["value_bets"]) for p in preds)
     return f"""<!doctype html><html><head><meta charset="utf-8">
@@ -71,7 +73,8 @@ def text_summary(preds) -> str:
     lines = []
     for p in sorted(preds, key=lambda x: x["kickoff"]):
         pr = p["probs"]
-        lines.append(f"{p['match']}: {pr['home']}/{pr['draw']}/{pr['away']} · {p['top_scores'][0][0]}")
+        lines.append(f"{p['match']}: {pr['home']}/{pr['draw']}/{pr['away']} · {p['top_scores'][0][0]}"
+                     f" · Pick: {p.get('pick', '')}")
         for v in p["value_bets"]:
             tag = "⚠ verify" if v.get("verify") else f"{v['stake_pct']}%"
             lines.append(f"  ★ {SEL.get(v['selection'], v['selection'])} @ {v['price']:.2f}"

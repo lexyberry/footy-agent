@@ -34,6 +34,7 @@ def main(argv=None):
     b.add_argument("--from", dest="frm", default="2025-08-01")
     b.add_argument("--to", dest="to", default=date.today().isoformat())
     b.add_argument("--league", type=int, help="single league id (default all)")
+    b.add_argument("--store", action="store_true", help="save results for the dashboard and push them")
     sub.add_parser("bookmakers", help="list API-Football bookmakers (check Superbet's id)")
     sub.add_parser("sync", help="push recent data to the Lovable dashboard")
     ap.add_argument("-v", action="store_true")
@@ -77,9 +78,12 @@ def main(argv=None):
         print(json.dumps(evaluate.scoreboard(con), indent=2))
         sync.push(con, cfg, include_scoreboard=True)
     elif a.cmd == "backtest":
-        leagues = [a.league] if a.league else [l["id"] for l in cfg["leagues"]]
-        for lid in leagues:
-            print(json.dumps(backtest.run(con, cfg, lid, a.frm, a.to), indent=2))
+        res = backtest.run_all(con, cfg, a.frm, a.to, [a.league] if a.league else None)
+        for r in res["leagues"]:
+            print(backtest.one_line(r))
+        if a.store:
+            backtest.store(con, res)
+            sync.push(con, cfg, include_scoreboard=True)
     elif a.cmd == "sync":
         print(sync.push(con, cfg, include_scoreboard=True))
     elif a.cmd == "bookmakers":

@@ -17,12 +17,21 @@ def run(cmd):
 
 
 def first_boot(cfg):
-    """On a fresh volume, pull history before the first matchday run."""
+    """Pull any missing league-seasons, and run a backtest if none is stored yet."""
     from .db import connect
     con = connect(cfg["db_path"])
-    if con.execute("SELECT COUNT(*) FROM fixtures").fetchone()[0] == 0:
-        log.info("empty database: running initial ingest")
+    have = {(r[0], r[1]) for r in con.execute(
+        "SELECT league_id, season FROM fixtures GROUP BY league_id, season")}
+    need = {(l["id"], s) for l in cfg["leagues"] for s in cfg["history_seasons"]}
+    if need - have:
+        log.info("missing league-seasons %s: running ingest", sorted(need - have))
         run(["ingest"])
+    if not con.execute("SELECT 1 FROM sync_state WHERE key='backtest'").fetchone():
+        run_backtest()
+
+
+def run_backtest():
+    run(["backtest", "--from", "2025-08-01", "--store"])
 
 
 def main():
@@ -42,6 +51,9 @@ def main():
         if now.hour == 3 and last.get("settle") != today:
             run(["settle"])
             last["settle"] = today
+        if now.weekday() == 0 and now.hour == 4 and last.get("backtest") != today:
+            run_backtest()  # weekly refresh, Monday early morning
+            last["backtest"] = today
         run(["lineups"])
         time.sleep(poll)
 

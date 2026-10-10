@@ -86,7 +86,8 @@ class FakeClaude:
         return SimpleNamespace(content=[SimpleNamespace(type="tool_use", input={
             "home_xg_multiplier": self.h, "away_xg_multiplier": self.a,
             "key_factors": ["Star Striker out (hamstring)"], "reasoning": "test",
-            "confidence": "medium"})])
+            "confidence": "medium", "summary": "Team0 are favourites because of stronger ratings.",
+            "reasons": ["Attack rank 1st vs 12th", "Elo gap +150"]})])
 
 
 @pytest.fixture
@@ -239,3 +240,40 @@ def test_promoted_gradient():
         assert so.check_grad(cap["f"], cap["g"], x) < 1e-3
     finally:
         dc.minimize = orig
+
+
+def test_explanations(setup):
+    api, con, cfg = setup
+    fx = con.execute("SELECT id FROM fixtures WHERE status='NS' AND home_id=100 LIMIT 1").fetchone()["id"]
+    fc = FakeClaude()
+    r = pipeline.predict_fixture(api, con, cfg, fx, claude_client=fc, save=False)
+    assert r["pick"].endswith("win") or r["pick"] == "Draw"
+    assert r["summary"].startswith("Team0 are favourites")
+    assert r["reasons"] == ["Attack rank 1st vs 12th", "Elo gap +150"]
+    labels = [d["label"] for d in r["drivers"]]
+    assert "Attack rating (league rank)" in labels and "Form (last 6, newest first)" in labels
+    assert any(d["label"] == "Market view" for d in r["drivers"])
+    assert '"drivers"' in str(fc.last["messages"])          # Claude sees the drivers
+    form = next(d for d in r["drivers"] if d["label"].startswith("Form"))
+    assert set(form["home"]) <= set("WDL") and len(form["home"]) == 6
+
+
+def test_template_explanation_when_claude_fails(setup):
+    api, con, cfg = setup
+
+    class Broken:
+        messages = SimpleNamespace(create=lambda **k: (_ for _ in ()).throw(RuntimeError("down")))
+
+    fx = con.execute("SELECT id FROM fixtures WHERE status='NS' LIMIT 1").fetchone()["id"]
+    r = pipeline.predict_fixture(api, con, cfg, fx, claude_client=Broken(), save=False)
+    assert r["pick"] in r["summary"] and "expected goals" in r["summary"]
+    assert len(r["reasons"]) >= 3
+
+
+def test_backtest_store_and_report(setup):
+    _, con, cfg = setup
+    res = backtest.run_all(con, cfg, "2025-09-01", "2026-06-01")
+    assert res["leagues"] and res["leagues"][0]["league_name"] == "Sim League"
+    assert "blend_grid_logloss" not in res["leagues"][0]
+    backtest.store(con, res)
+    assert "log-loss base" in backtest.one_line(res["leagues"][0])

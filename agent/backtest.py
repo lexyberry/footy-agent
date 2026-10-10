@@ -56,3 +56,36 @@ def run(con, cfg, league_id: int, test_from: str, test_to: str, step_days=7) -> 
                                                        "actual": round(float((y[bins == b] == 0).mean()), 3)}
                                for b in range(10) if (bins == b).sum() >= 10}
     return res
+
+
+def run_all(con, cfg, test_from: str, test_to: str, league_ids=None) -> dict:
+    import logging
+    from datetime import datetime, timezone
+    names = {l["id"]: l["name"] for l in cfg["leagues"]}
+    out = []
+    for lid in league_ids or list(names):
+        try:
+            r = run(con, cfg, lid, test_from, test_to)
+        except Exception as e:  # noqa: BLE001  (e.g. too little data for a league)
+            logging.getLogger(__name__).warning("backtest league %s failed: %s", lid, e)
+            continue
+        if r.get("n"):
+            r["league_name"] = names.get(lid, str(lid))
+            r.pop("blend_grid_logloss", None)
+            out.append(r)
+    return {"run_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "test_from": test_from, "test_to": test_to, "leagues": out}
+
+
+def one_line(r: dict) -> str:
+    return (f"{r['league_name']}: n={r['n']} | log-loss base {r['baseline_base_rates']['log_loss']:.4f}"
+            f" DC {r['dixon_coles']['log_loss']:.4f} Elo {r['elo']['log_loss']:.4f}"
+            f" blend {r['blend_at_best']['log_loss']:.4f} (w_dc={r['best_blend_weight_dc']})"
+            f" | acc {r['blend_at_best']['accuracy']*100:.1f}%")
+
+
+def store(con, res: dict):
+    import json
+    con.execute("INSERT INTO sync_state VALUES ('backtest', ?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (json.dumps(res),))
+    con.commit()

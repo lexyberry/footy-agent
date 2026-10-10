@@ -152,7 +152,7 @@ def test_end_to_end_predict_and_report(setup):
     assert r["bookmaker"] == "Superbet" and "1x2" in r["odds"]
     assert r["context"]["key_factors"] == ["Star Striker out (hamstring)"]
     assert "Star Striker" in str(fc.last["messages"])          # injuries reached Claude
-    assert fc.last["tool_choice"]["name"] == "submit_adjustment"
+    assert fc.last["tools"][0]["name"] == "submit_adjustment"
     assert con.execute("SELECT COUNT(*) FROM predictions").fetchone()[0] == 1
     html = report.render([r], cfg, "Test")
     assert "Team" in html and "viewport" in html
@@ -202,3 +202,40 @@ def test_backtest_beats_baseline(setup):
     res = backtest.run(con, cfg, 39, "2025-09-01", "2026-06-01", step_days=28)
     assert res["n"] > 200
     assert res["blend_at_best"]["log_loss"] < res["baseline_base_rates"]["log_loss"]
+
+
+def test_promoted_team_shrinkage():
+    """A promoted side with a lucky 6-game start shouldn't be rated as a title contender."""
+    from agent.models.dixon_coles import DixonColes
+    rng = np.random.default_rng(3)
+    H, A, hg, ag, days = [], [], [], [], []
+    for k in range(600):  # 10 established teams, ~2 seasons
+        i, j = rng.choice(10, 2, replace=False)
+        H.append(i); A.append(j); hg.append(rng.poisson(1.4)); ag.append(rng.poisson(1.1))
+        days.append(400 + k)
+    for k in range(6):  # promoted team 99 wins 3-0 six times
+        H.append(99); A.append(k); hg.append(3); ag.append(0); days.append(10 + k)
+    plain = DixonColes(l2=0.05).fit(H, A, hg, ag, days)
+    shrunk = DixonColes(l2=0.05).fit(H, A, hg, ag, days, promoted={99})
+    i = plain.teams.index(99)
+    assert shrunk.attack[i] < plain.attack[i] - 0.2
+    lam_p, _ = plain.expected_goals(99, 0)
+    lam_s, _ = shrunk.expected_goals(99, 0)
+    assert lam_s < lam_p
+
+
+def test_promoted_gradient():
+    import scipy.optimize as so
+    from agent.models import dixon_coles as dc
+    cap = {}
+    orig = so.minimize
+    dc.minimize = lambda f, x0, jac=None, **k: (cap.update(f=f, g=jac), orig(f, x0, jac=jac, **k))[1]
+    try:
+        rng = np.random.default_rng(1)
+        H = rng.integers(0, 8, 300); A = (H + rng.integers(1, 8, 300)) % 8
+        dc.DixonColes().fit(H, A, rng.poisson(1.4, 300), rng.poisson(1.1, 300),
+                            rng.integers(0, 700, 300), promoted={3})
+        x = rng.normal(0, .2, 18); x[-1] = -0.1
+        assert so.check_grad(cap["f"], cap["g"], x) < 1e-3
+    finally:
+        dc.minimize = orig

@@ -12,7 +12,7 @@ class Elo:
         self.scale = 1 / 150
 
     def rating(self, t):
-        return self.r.get(t, self.base - 50)  # unseen teams start slightly below average
+        return self.r.get(t, self.base - 100)  # unseen (usually promoted) teams start below average
 
     def run(self, matches):
         """matches: iterable of (season, home, away, hg, ag) in chronological order.

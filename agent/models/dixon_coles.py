@@ -26,7 +26,10 @@ class DixonColes:
     rho: float = -0.05
     n_matches: dict = field(default_factory=dict)
 
-    def fit(self, home_ids, away_ids, hg, ag, days_ago):
+    def fit(self, home_ids, away_ids, hg, ag, days_ago, promoted=(), prior_strength=6.0,
+            promoted_prior=(-0.25, 0.25)):
+        """promoted: teams with no prior top-flight history. They are shrunk toward
+        promoted_prior (attack, defence-weakness); the pull fades as matches accumulate."""
         home_ids, away_ids = np.asarray(home_ids), np.asarray(away_ids)
         hg, ag = np.asarray(hg, float), np.asarray(ag, float)
         w = 0.5 ** (np.asarray(days_ago, float) / self.half_life_days)
@@ -39,6 +42,13 @@ class DixonColes:
         self.n_matches = {t: int(((home_ids == t) | (away_ids == t)).sum()) for t in self.teams}
         lg_h, lg_a = gammaln(hg + 1), gammaln(ag + 1)
 
+        # per-team prior: mean and strength (strength decays with matches played)
+        promoted = set(promoted)
+        mu_att = np.array([promoted_prior[0] if t in promoted else 0.0 for t in self.teams])
+        mu_def = np.array([promoted_prior[1] if t in promoted else 0.0 for t in self.teams])
+        lam_t = np.array([self.l2 + (prior_strength * np.exp(-self.n_matches[t] / 10)
+                                     if t in promoted else 0.0) for t in self.teams])
+
         def unpack(p):
             return p[:n], p[n:2 * n], p[2 * n], p[2 * n + 1]
 
@@ -49,7 +59,7 @@ class DixonColes:
             ll = (np.log(_tau(hg, ag, lam, mu, rho))
                   + hg * np.log(lam) - lam - lg_h
                   + ag * np.log(mu) - mu - lg_a)
-            pen = self.l2 * (att @ att + de @ de) + 10.0 * att.sum() ** 2
+            pen = (lam_t * ((att - mu_att) ** 2 + (de - mu_def) ** 2)).sum() + 10.0 * att.sum() ** 2
             return -(w * ll).sum() + pen
 
         def grad(p):
@@ -75,8 +85,8 @@ class DixonColes:
             g_de = np.bincount(ai, dlam, n) + np.bincount(hi, dmu, n)
             g_home = dlam.sum()
             g = -np.concatenate([g_att, g_de, [g_home, drho]])
-            g[:n] += 2 * self.l2 * att + 20.0 * att.sum()
-            g[n:2 * n] += 2 * self.l2 * de
+            g[:n] += 2 * lam_t * (att - mu_att) + 20.0 * att.sum()
+            g[n:2 * n] += 2 * lam_t * (de - mu_def)
             return g
 
         x0 = np.concatenate([np.zeros(2 * n), [0.25, -0.05]])
@@ -90,10 +100,10 @@ class DixonColes:
     def expected_goals(self, home_id, away_id):
         i, j = self._idx.get(home_id), self._idx.get(away_id)
         # unseen (e.g. newly promoted with no data): use a below-average prior
-        a_h = self.attack[i] if i is not None else -0.2
-        d_h = self.defence[i] if i is not None else 0.2
-        a_a = self.attack[j] if j is not None else -0.2
-        d_a = self.defence[j] if j is not None else 0.2
+        a_h = self.attack[i] if i is not None else -0.25
+        d_h = self.defence[i] if i is not None else 0.25
+        a_a = self.attack[j] if j is not None else -0.25
+        d_a = self.defence[j] if j is not None else 0.25
         return float(np.exp(self.home_adv + a_h + d_a)), float(np.exp(a_a + d_h))
 
     def score_matrix(self, lam, mu, max_goals=10):

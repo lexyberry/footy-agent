@@ -35,9 +35,18 @@ def train(con, cfg, league_id: int, as_of: str | None = None) -> LeagueModel:
     mc = cfg["model"]
     ref = _parse(as_of)
     days = [(ref - _parse(r["kickoff"])).days for r in rows]
+    # promoted = teams that only appear in the latest season of the training window
+    latest = max(r["season"] for r in rows)
+    seasons_by_team: dict = {}
+    for r in rows:
+        for t in (r["home_id"], r["away_id"]):
+            seasons_by_team.setdefault(t, set()).add(r["season"])
+    has_history = any(r["season"] < latest for r in rows)
+    promoted = {t for t, s in seasons_by_team.items() if s == {latest}} if has_history else set()
     dc = DixonColes(half_life_days=mc["dc_half_life_days"], l2=mc["dc_l2"]).fit(
         [r["home_id"] for r in rows], [r["away_id"] for r in rows],
-        [r["home_goals"] for r in rows], [r["away_goals"] for r in rows], days)
+        [r["home_goals"] for r in rows], [r["away_goals"] for r in rows], days,
+        promoted=promoted, prior_strength=mc.get("promoted_prior_strength", 6.0))
 
     elo = Elo(k=mc["elo_k"], home_adv=mc["elo_home_adv"],
               season_regression=mc["elo_season_regression"])

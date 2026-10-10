@@ -103,11 +103,17 @@ def ask_claude(ctx: dict, base_summary: dict, cfg: dict, client=None) -> dict:
         client = anthropic.Anthropic()
     payload = {"context": ctx, "model_base": base_summary}
     try:
+        # Forced tool_choice isn't supported by every model, so use "auto" and require
+        # the tool in the instructions; anything else falls back to neutral.
         msg = client.messages.create(
-            model=cfg["claude"]["model"], max_tokens=800, system=SYSTEM,
-            tools=[TOOL], tool_choice={"type": "tool", "name": TOOL["name"]},
+            model=cfg["claude"]["model"], max_tokens=4000,
+            system=SYSTEM + "\n\nAlways answer by calling submit_adjustment exactly once.",
+            tools=[TOOL], tool_choice={"type": "auto"},
             messages=[{"role": "user", "content": json.dumps(payload, default=str)}])
-        block = next(b for b in msg.content if getattr(b, "type", "") == "tool_use")
+        block = next((b for b in msg.content if getattr(b, "type", "") == "tool_use"), None)
+        if block is None:
+            log.warning("Claude did not call submit_adjustment; using neutral")
+            return NEUTRAL
         out = dict(NEUTRAL, **block.input)
         out["home_xg_multiplier"] = float(out["home_xg_multiplier"])
         out["away_xg_multiplier"] = float(out["away_xg_multiplier"])

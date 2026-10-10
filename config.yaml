@@ -14,6 +14,7 @@ current_season: 2026
 model:
   dc_half_life_days: 365        # time-decay for Dixon-Coles weights
   dc_l2: 0.05                   # shrinkage for teams with little data
+  promoted_prior_strength: 6.0  # pull of newly promoted teams toward a below-average prior
   elo_k: 20
   elo_home_adv: 60
   elo_season_regression: 0.33   # pull ratings toward mean between seasons

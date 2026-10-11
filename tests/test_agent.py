@@ -395,3 +395,33 @@ def test_euro_only_team_starts_below_average(tmp_path):
     att = lm.dc.attack[lm.dc._idx[900]]
     strong = np.mean([lm.dc.attack[lm.dc._idx[100 + t]] for t in range(10)])
     assert att < strong
+
+
+def test_rerun_does_not_duplicate_bets(setup):
+    api, con, cfg = setup
+    cfg["market"]["min_edge"] = -1
+    cfg["market"]["min_prob"] = 0
+    fx = con.execute("SELECT id FROM fixtures WHERE status='NS' ORDER BY kickoff LIMIT 1").fetchone()["id"]
+    for _ in range(4):
+        pipeline.predict_fixture(api, con, cfg, fx, claude_client=FakeClaude())
+    rows = con.execute("SELECT market, selection, COUNT(*) n FROM bets GROUP BY 1, 2").fetchall()
+    assert rows and all(r["n"] == 1 for r in rows)
+    # a selection that stops qualifying is withdrawn and queued for deletion on the dashboard
+    cfg["market"]["min_edge"] = 10
+    pipeline.predict_fixture(api, con, cfg, fx, claude_client=FakeClaude())
+    assert con.execute("SELECT COUNT(*) FROM bets").fetchone()[0] == 0
+    assert con.execute("SELECT COUNT(*) FROM deleted_bets").fetchone()[0] == len(rows)
+
+
+def test_migration_collapses_existing_duplicates(tmp_path):
+    import sqlite3
+    from agent.db import SCHEMA
+    path = str(tmp_path / "old.db")
+    raw = sqlite3.connect(path)
+    raw.executescript(SCHEMA)
+    for i in range(4):
+        raw.execute("INSERT INTO bets (fixture_id, market, selection, price) VALUES (1,'ou25','under',1.84)")
+    raw.commit(); raw.close()
+    con = connect(path)
+    assert con.execute("SELECT COUNT(*) FROM bets").fetchone()[0] == 1
+    assert con.execute("SELECT COUNT(*) FROM deleted_bets").fetchone()[0] == 3

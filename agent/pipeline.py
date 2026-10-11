@@ -129,14 +129,29 @@ def _save(con, r, s, matrix6) -> int:
         (r["fixture_id"], now, r["stage"], s["p_home"], s["p_draw"], s["p_away"],
          s["p_over25"], s["p_btts"], r["xg"][0], r["xg"][1], json.dumps(r["top_scores"]),
          json.dumps(r["adjustment"]), json.dumps(r["context"]), json.dumps(payload)))
+    # One bet per fixture/market/selection: a re-run updates it to the latest price and
+    # edge; a selection that no longer qualifies before kick-off is withdrawn.
+    keep = set()
     for v in r["value_bets"]:
+        keep.add((v["market"], v["selection"]))
         con.execute(
             """INSERT INTO bets (prediction_id, fixture_id, created_at, market, selection, price,
                bookmaker, model_prob, market_prob, edge, stake_pct, verify)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+               ON CONFLICT(fixture_id, market, selection) DO UPDATE SET
+                 prediction_id=excluded.prediction_id, created_at=excluded.created_at,
+                 price=excluded.price, bookmaker=excluded.bookmaker,
+                 model_prob=excluded.model_prob, market_prob=excluded.market_prob,
+                 edge=excluded.edge, stake_pct=excluded.stake_pct, verify=excluded.verify
+               WHERE bets.result IS NULL""",
             (cur.lastrowid, r["fixture_id"], now, v["market"], v["selection"], v["price"],
              r["bookmaker"], v["model_prob"], v["market_prob"], v["edge"], v["stake_pct"],
              int(v.get("verify", False))))
+    for b in con.execute("SELECT id, market, selection FROM bets WHERE fixture_id=? AND result IS NULL",
+                         (r["fixture_id"],)).fetchall():
+        if (b["market"], b["selection"]) not in keep:
+            con.execute("DELETE FROM bets WHERE id=?", (b["id"],))
+            con.execute("INSERT INTO deleted_bets VALUES (?)", (b["id"],))
     con.commit()
     return cur.lastrowid
 

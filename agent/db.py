@@ -40,6 +40,13 @@ MIGRATIONS = [
     "ALTER TABLE predictions ADD COLUMN payload TEXT",   # full result JSON for the dashboard
     "ALTER TABLE bets ADD COLUMN verify INTEGER DEFAULT 0",
     "CREATE TABLE IF NOT EXISTS sync_state (key TEXT PRIMARY KEY, value TEXT)",
+    "CREATE TABLE IF NOT EXISTS deleted_bets (id INTEGER PRIMARY KEY)",
+    # collapse duplicate bets from repeated runs: keep the latest row per selection
+    """INSERT OR IGNORE INTO deleted_bets SELECT id FROM bets WHERE id NOT IN
+         (SELECT MAX(id) FROM bets GROUP BY fixture_id, market, selection)""",
+    """DELETE FROM bets WHERE id NOT IN
+         (SELECT MAX(id) FROM bets GROUP BY fixture_id, market, selection)""",
+    "CREATE UNIQUE INDEX IF NOT EXISTS ux_bets_sel ON bets(fixture_id, market, selection)",
 ]
 
 

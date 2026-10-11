@@ -109,6 +109,15 @@ def push(con, cfg, post=None, include_scoreboard=False) -> dict:
                 log.error("sync %s failed: %s %s", table, r.status_code, getattr(r, "text", "")[:300])
                 return sent
         sent[table] = len(data)
+    gone = [r["id"] for r in con.execute("SELECT id FROM deleted_bets")]
+    if gone:
+        r = post({"table": "bets", "delete_ids": gone})
+        if getattr(r, "status_code", 200) < 300:
+            con.execute(f"DELETE FROM deleted_bets WHERE id IN ({','.join('?' * len(gone))})", gone)
+            con.commit()
+            sent["bets_deleted"] = len(gone)
+        else:
+            log.error("sync bet deletions failed: %s", getattr(r, "status_code", "?"))
     if rows["odds_snapshots"]:
         _set_state(con, "odds_taken_at", rows["odds_snapshots"][-1]["taken_at"])
     log.info("dashboard sync: %s", sent)

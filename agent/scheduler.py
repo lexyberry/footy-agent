@@ -45,19 +45,31 @@ def main():
     tz = ZoneInfo(cfg["timezone"])
     morning = cfg["schedule"]["morning_run"]
     poll = cfg["schedule"]["poll_every_min"] * 60
-    last = {}
+    from .db import connect
+    con = connect(cfg["db_path"])
+
+    def done(key, today):
+        r = con.execute("SELECT value FROM sync_state WHERE key=?", (f"last_{key}",)).fetchone()
+        return r is not None and r[0] == today
+
+    def mark(key, today):
+        con.execute("INSERT INTO sync_state VALUES (?,?) ON CONFLICT(key) DO UPDATE "
+                    "SET value=excluded.value", (f"last_{key}", today))
+        con.commit()
+
     while True:
         now = datetime.now(tz)
         today = now.date().isoformat()
-        if now.strftime("%H:%M") >= morning and last.get("matchday") != today:
+        # last-run markers live in the database so a restart doesn't repeat today's run
+        if now.strftime("%H:%M") >= morning and not done("matchday", today):
             run(["matchday"])
-            last["matchday"] = today
-        if now.hour == 3 and last.get("settle") != today:
+            mark("matchday", today)
+        if now.hour == 3 and not done("settle", today):
             run(["settle"])
-            last["settle"] = today
-        if now.weekday() == 0 and now.hour == 4 and last.get("backtest") != today:
+            mark("settle", today)
+        if now.weekday() == 0 and now.hour == 4 and not done("backtest", today):
             run_backtest()  # weekly refresh, Monday early morning
-            last["backtest"] = today
+            mark("backtest", today)
         run(["lineups"])
         time.sleep(poll)
 

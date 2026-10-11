@@ -277,3 +277,84 @@ def test_backtest_store_and_report(setup):
     assert "blend_grid_logloss" not in res["leagues"][0]
     backtest.store(con, res)
     assert "log-loss base" in backtest.one_line(res["leagues"][0])
+
+
+def _pooled_world(tmp_path):
+    """League 39 (strong) and league 140 (weak), each 10 teams, linked only by cup games."""
+    from agent.db import upsert_fixture
+    rng = np.random.default_rng(11)
+    cfg = copy.deepcopy(load_config())
+    cfg["leagues"] = [{"id": 39, "name": "Strong"}, {"id": 140, "name": "Weak"},
+                      {"id": 2, "name": "Champions League", "europe": True, "pooled": True}]
+    cfg["data_leagues"] = [{"id": 3, "name": "Europa League", "europe": True}]
+    cfg["db_path"] = str(tmp_path / "p.db")
+    con = connect(cfg["db_path"])
+    strength = {}
+    for t in range(10):
+        strength[100 + t] = (0.35 + RNG.normal(0, .15), -0.35 + RNG.normal(0, .1))  # strong league
+        strength[200 + t] = (-0.35 + RNG.normal(0, .15), 0.35 + RNG.normal(0, .1))  # weak league
+    fid = [10_000]
+
+    def add(lg, season, ko, h, a, home_adv):
+        lam = np.exp(home_adv + strength[h][0] + strength[a][1])
+        mu = np.exp(strength[a][0] + strength[h][1])
+        fid[0] += 1
+        upsert_fixture(con, {"fixture": {"id": fid[0], "date": ko.isoformat(), "status": {"short": "FT"}},
+                             "league": {"id": lg, "season": season, "round": "R"},
+                             "teams": {"home": {"id": h, "name": f"T{h}"}, "away": {"id": a, "name": f"T{a}"}},
+                             "goals": {"home": int(rng.poisson(lam)), "away": int(rng.poisson(mu))}})
+
+    for season in (2024, 2025):
+        start = datetime(season, 8, 10, tzinfo=timezone.utc)
+        for base, lg in ((100, 39), (200, 140)):
+            k = 0
+            for i in range(10):
+                for j in range(10):
+                    if i != j:
+                        add(lg, season, start + timedelta(days=3 * (k // 5)), base + i, base + j, 0.28)
+                        k += 1
+        for k in range(60):  # cross-league cup games, smaller home advantage
+            h, a = (100 + rng.integers(10), 200 + rng.integers(10))
+            if k % 2:
+                h, a = a, h
+            add(2 if k % 3 else 3, season, start + timedelta(days=30 + 4 * k), int(h), int(a), 0.12)
+    con.commit()
+    return con, cfg
+
+
+def test_pooled_model_learns_league_strength(tmp_path):
+    con, cfg = _pooled_world(tmp_path)
+    as_of = "2026-08-01T00:00:00+00:00"
+    lm = engine.train(con, cfg, 2, as_of)
+    assert lm.pooled and len(lm.dc.home_advs) == 2
+    assert lm.dc.home_advs[1] < lm.dc.home_advs[0]           # cup home edge is smaller
+    att = {t: lm.dc.attack[lm.dc._idx[t]] for t in lm.dc.teams}
+    strong = np.mean([att[100 + t] for t in range(10)])
+    weak = np.mean([att[200 + t] for t in range(10)])
+    assert strong - weak > 0.4                                 # true gap is 0.7
+    b = engine.base_prediction(lm, 205, 105, cfg)             # weak side at home vs strong side
+    assert b["p_blend"][2] > b["p_blend"][0]                   # away (strong) still favoured
+    # domestic-only model for the weak league can't see the gap
+    dom = engine.train(con, cfg, 140, as_of)
+    assert abs(np.mean(dom.dc.attack)) < 0.05
+    # neutral venue removes home advantage
+    n = engine.base_prediction(lm, 105, 205, cfg, neutral=True)
+    h = engine.base_prediction(lm, 105, 205, cfg)
+    assert n["lam"] < h["lam"]
+
+
+def test_grouped_home_gradient():
+    import scipy.optimize as so
+    from agent.models import dixon_coles as dc
+    cap = {}
+    orig = so.minimize
+    dc.minimize = lambda f, x0, jac=None, **k: (cap.update(f=f, g=jac), orig(f, x0, jac=jac, **k))[1]
+    try:
+        rng = np.random.default_rng(2)
+        H = rng.integers(0, 8, 300); A = (H + rng.integers(1, 8, 300)) % 8
+        dc.DixonColes().fit(H, A, rng.poisson(1.4, 300), rng.poisson(1.1, 300),
+                            rng.integers(0, 700, 300), groups=rng.integers(0, 2, 300))
+        x = rng.normal(0, .2, 19); x[-1] = -0.1
+        assert so.check_grad(cap["f"], cap["g"], x) < 1e-3
+    finally:
+        dc.minimize = orig

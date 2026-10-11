@@ -17,6 +17,22 @@ class LeagueModel:
     dc: DixonColes
     elo: Elo
     n_train: int
+    pooled: bool = False        # cross-league model (European cups)
+    blend_weight_dc: float | None = None
+
+
+def league_cfg(cfg, league_id) -> dict:
+    return next((l for l in cfg["leagues"] if l["id"] == league_id), {"id": league_id})
+
+
+def europe_ids(cfg) -> set:
+    return {l["id"] for l in cfg["leagues"] + cfg.get("data_leagues", []) if l.get("europe")}
+
+
+def _football_year(ts: str) -> int:
+    """Season key that turns over on 1 July, so leagues with different calendars align."""
+    d = _parse(ts)
+    return d.year if d.month >= 7 else d.year - 1
 
 
 def _parse(ts):
@@ -26,6 +42,9 @@ def _parse(ts):
 
 def train(con, cfg, league_id: int, as_of: str | None = None) -> LeagueModel:
     as_of = as_of or datetime.now(timezone.utc).isoformat()
+    lc = league_cfg(cfg, league_id)
+    if lc.get("pooled"):
+        return _train_pooled(con, cfg, league_id, as_of, lc)
     rows = con.execute(
         f"""SELECT season, kickoff, home_id, away_id, home_goals, away_goals FROM fixtures
             WHERE league_id=? AND status IN {FINISHED} AND kickoff < ? ORDER BY kickoff""",
@@ -57,16 +76,50 @@ def train(con, cfg, league_id: int, as_of: str | None = None) -> LeagueModel:
     w = 0.5 ** (np.array(days) / mc["dc_half_life_days"])
     burn = min(100, len(rows) // 4)  # early Elo gaps are noisy
     elo.fit_outcome_map(gaps[burn:], outcomes[burn:], w[burn:])
-    return LeagueModel(league_id, as_of, dc, elo, len(rows))
+    return LeagueModel(league_id, as_of, dc, elo, len(rows),
+                       blend_weight_dc=lc.get("blend_weight_dc"))
 
 
-def base_prediction(lm: LeagueModel, home_id, away_id, cfg) -> dict:
+def _train_pooled(con, cfg, league_id, as_of, lc) -> LeagueModel:
+    """One model over every stored domestic league plus all European cup matches.
+    Domestic games rate teams within each league; European games link the leagues,
+    which gives the cross-league strength a Champions League tie needs."""
+    rows = con.execute(
+        f"""SELECT league_id, kickoff, home_id, away_id, home_goals, away_goals FROM fixtures
+            WHERE status IN {FINISHED} AND kickoff < ? AND home_goals IS NOT NULL
+            ORDER BY kickoff""", (as_of,)).fetchall()
+    eu = europe_ids(cfg)
+    n_eu = sum(r["league_id"] in eu for r in rows)
+    if n_eu < 50:
+        raise ValueError(f"pooled model: only {n_eu} European matches before {as_of}")
+    mc = cfg["model"]
+    ref = _parse(as_of)
+    days = [(ref - _parse(r["kickoff"])).days for r in rows]
+    groups = [1 if r["league_id"] in eu else 0 for r in rows]
+    dc = DixonColes(half_life_days=mc["dc_half_life_days"], l2=mc["dc_l2"]).fit(
+        [r["home_id"] for r in rows], [r["away_id"] for r in rows],
+        [r["home_goals"] for r in rows], [r["away_goals"] for r in rows], days, groups=groups)
+
+    elo = Elo(k=mc["elo_k"], home_adv=mc["elo_home_adv"],
+              season_regression=mc["elo_season_regression"])
+    gaps = elo.run((_football_year(r["kickoff"]), r["home_id"], r["away_id"],
+                    r["home_goals"], r["away_goals"]) for r in rows)
+    sel = np.array(groups) == 1          # fit the outcome map on European games only
+    outcomes = np.array([2 if r["home_goals"] > r["away_goals"] else
+                         1 if r["home_goals"] == r["away_goals"] else 0 for r in rows])
+    w = 0.5 ** (np.array(days) / mc["dc_half_life_days"])
+    elo.fit_outcome_map(gaps[sel], outcomes[sel], w[sel])
+    return LeagueModel(league_id, as_of, dc, elo, len(rows), pooled=True,
+                       blend_weight_dc=lc.get("blend_weight_dc"))
+
+
+def base_prediction(lm: LeagueModel, home_id, away_id, cfg, neutral=False) -> dict:
     mg = cfg["model"]["max_goals"]
-    lam, mu = lm.dc.expected_goals(home_id, away_id)
+    lam, mu = lm.dc.expected_goals(home_id, away_id, group=1 if lm.pooled else 0, neutral=neutral)
     m_dc = score_matrix(lam, mu, lm.dc.rho, mg)
     p_dc = probs_1x2(m_dc)
-    p_elo = lm.elo.probs(home_id, away_id)
-    wdc = cfg["model"]["blend_weight_dc"]
+    p_elo = lm.elo.probs(home_id, away_id, neutral=neutral)
+    wdc = lm.blend_weight_dc if lm.blend_weight_dc is not None else cfg["model"]["blend_weight_dc"]
     p_blend = wdc * p_dc + (1 - wdc) * p_elo
     m = rescale_to_1x2(m_dc, p_blend)
     return {"lam": lam, "mu": mu, "p_dc": p_dc, "p_elo": p_elo, "p_blend": p_blend,
@@ -131,9 +184,10 @@ def drivers(lm: LeagueModel, home_id, away_id, base: dict, form_home: str, form_
         i = dc._idx.get(t)
         return "n/a (new)" if i is None else f"{-dc.defence[i]:+.2f} ({_ordinal(def_rank[t])})"
 
+    scope = "Europe" if lm.pooled else "league"
     rows = [
-        {"label": "Attack rating (league rank)", "home": att(home_id), "away": att(away_id)},
-        {"label": "Defence rating (league rank)", "home": de(home_id), "away": de(away_id)},
+        {"label": f"Attack rating ({scope} rank)", "home": att(home_id), "away": att(away_id)},
+        {"label": f"Defence rating ({scope} rank)", "home": de(home_id), "away": de(away_id)},
         {"label": "Elo rating", "home": f"{lm.elo.rating(home_id):.0f}", "away": f"{lm.elo.rating(away_id):.0f}"},
         {"label": "Expected goals", "home": f"{base['lam']:.2f}", "away": f"{base['mu']:.2f}"},
         {"label": "Form (last 6, newest first)", "home": form_home or "–", "away": form_away or "–"},

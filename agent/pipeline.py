@@ -38,7 +38,8 @@ def predict_fixture(api, con, cfg, fixture_id: int, stage="base", manual_odds=No
     fx = dict(fx)
 
     lm = get_model(con, cfg, fx["league_id"])
-    base = engine.base_prediction(lm, fx["home_id"], fx["away_id"], cfg)
+    neutral = lm.pooled and (fx.get("round") or "").strip().lower() == "final"
+    base = engine.base_prediction(lm, fx["home_id"], fx["away_id"], cfg, neutral=neutral)
     base_sum = engine.summarize(base["matrix"])
 
     ctx = context.gather(api, con, fx, cfg)
@@ -111,7 +112,7 @@ def _template_reasons(fx, drv) -> list[str]:
     for d in drv:
         if "note" in d:
             out.append(d["note"])
-        elif d["label"] in ("Attack rating (league rank)", "Defence rating (league rank)", "Elo rating"):
+        elif d["label"].startswith(("Attack rating", "Defence rating", "Elo rating")):
             out.append(f"{d['label']}: {fx['home']} {d['home']} vs {fx['away']} {d['away']}")
     return out[:5]
 

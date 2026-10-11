@@ -53,8 +53,8 @@ class Elo:
         self.scale = s
         return self
 
-    def probs(self, home, away):
-        gap = self.rating(home) - self.rating(away) + self.home_adv
+    def probs(self, home, away, neutral=False):
+        gap = self.rating(home) - self.rating(away) + (0 if neutral else self.home_adv)
         z = gap * self.scale
         pa = expit(self.cut[0] - z)
         pd = expit(self.cut[1] - z) - pa

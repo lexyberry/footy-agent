@@ -21,14 +21,17 @@ def now_iso():
 def ingest_fixtures(api, con, cfg, seasons=None):
     seasons = seasons or cfg["history_seasons"]
     n = 0
-    for lg in cfg["leagues"]:
+    for lg in cfg["leagues"] + cfg.get("data_leagues", []):
         for s in seasons:
             done = s < cfg["current_season"]
             rows = api.fixtures(lg["id"], s, ttl=-1 if done else 1800)
             for f in rows:
                 upsert_fixture(con, f)
             n += len(rows)
-            log.info("%s %s: %d fixtures", lg["name"], s, len(rows))
+            api_name = rows[0]["league"].get("name", "?") if rows else "?"
+            log.info("%s %s: %d fixtures (API: %s)", lg["name"], s, len(rows), api_name)
+            if not rows:
+                log.warning("no fixtures for %s (id %s) season %s", lg["name"], lg["id"], s)
     con.commit()
     return n
 

@@ -6,6 +6,29 @@ leagues:
   - {id: 78,  name: Bundesliga}
   - {id: 61,  name: Ligue 1}
   - {id: 106, name: Ekstraklasa}
+  # Cross-league model: rated from every league below + all European cup games
+  - {id: 2,   name: Champions League, europe: true, pooled: true, blend_weight_dc: 0.8}
+
+# Loaded for the Champions League model only (not predicted or shown on the dashboard)
+data_leagues:
+  - {id: 3,   name: Europa League, europe: true}
+  - {id: 848, name: Conference League, europe: true}
+  - {id: 94,  name: Primeira Liga}
+  - {id: 88,  name: Eredivisie}
+  - {id: 144, name: Belgian Pro League}
+  - {id: 203, name: Süper Lig}
+  - {id: 179, name: Scottish Premiership}
+  - {id: 218, name: Austrian Bundesliga}
+  - {id: 207, name: Swiss Super League}
+  - {id: 345, name: Czech First League}
+  - {id: 197, name: Greek Super League}
+  - {id: 119, name: Danish Superliga}
+  - {id: 210, name: Croatian HNL}
+  - {id: 286, name: Serbian SuperLiga}
+  - {id: 333, name: Ukrainian Premier League}
+  - {id: 103, name: Eliteserien}
+  - {id: 113, name: Allsvenskan}
+  - {id: 318, name: Cypriot First Division}
 
 # Seasons to train on (API-Football uses the start year, e.g. 2026 = 2026/27)
 history_seasons: [2024, 2025, 2026]

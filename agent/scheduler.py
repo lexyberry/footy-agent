@@ -22,12 +22,16 @@ def first_boot(cfg):
     con = connect(cfg["db_path"])
     have = {(r[0], r[1]) for r in con.execute(
         "SELECT league_id, season FROM fixtures GROUP BY league_id, season")}
-    need = {(l["id"], s) for l in cfg["leagues"] for s in cfg["history_seasons"]}
+    need = {(l["id"], s) for l in cfg["leagues"] + cfg.get("data_leagues", [])
+            for s in cfg["history_seasons"]}
     if need - have:
         log.info("missing league-seasons %s: running ingest", sorted(need - have))
         run(["ingest"])
-    if not con.execute("SELECT 1 FROM sync_state WHERE key='backtest'").fetchone():
-        run_backtest()
+    import json
+    row = con.execute("SELECT value FROM sync_state WHERE key='backtest'").fetchone()
+    tested = {l["league_id"] for l in json.loads(row[0])["leagues"]} if row else set()
+    if not row or {l["id"] for l in cfg["leagues"]} - tested:
+        run_backtest()  # none yet, or a newly added competition hasn't been tested
 
 
 def run_backtest():

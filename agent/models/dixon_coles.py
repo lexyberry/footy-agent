@@ -27,10 +27,14 @@ class DixonColes:
     n_matches: dict = field(default_factory=dict)
 
     def fit(self, home_ids, away_ids, hg, ag, days_ago, promoted=(), prior_strength=6.0,
-            promoted_prior=(-0.25, 0.25)):
+            promoted_prior=(-0.25, 0.25), groups=None):
         """promoted: teams with no prior top-flight history. They are shrunk toward
-        promoted_prior (attack, defence-weakness); the pull fades as matches accumulate."""
+        promoted_prior (attack, defence-weakness); the pull fades as matches accumulate.
+        groups: optional int per match selecting its home-advantage term
+        (0 = domestic, 1 = European cup), so cup home advantage is estimated separately."""
         home_ids, away_ids = np.asarray(home_ids), np.asarray(away_ids)
+        gi = np.zeros(len(home_ids), int) if groups is None else np.asarray(groups, int)
+        G = int(gi.max()) + 1 if len(gi) else 1
         hg, ag = np.asarray(hg, float), np.asarray(ag, float)
         w = 0.5 ** (np.asarray(days_ago, float) / self.half_life_days)
 
@@ -50,11 +54,11 @@ class DixonColes:
                                      if t in promoted else 0.0) for t in self.teams])
 
         def unpack(p):
-            return p[:n], p[n:2 * n], p[2 * n], p[2 * n + 1]
+            return p[:n], p[n:2 * n], p[2 * n:2 * n + G], p[2 * n + G]
 
         def nll(p):
             att, de, home, rho = unpack(p)
-            lam = np.exp(home + att[hi] + de[ai])
+            lam = np.exp(home[gi] + att[hi] + de[ai])
             mu = np.exp(att[ai] + de[hi])
             ll = (np.log(_tau(hg, ag, lam, mu, rho))
                   + hg * np.log(lam) - lam - lg_h
@@ -64,7 +68,7 @@ class DixonColes:
 
         def grad(p):
             att, de, home, rho = unpack(p)
-            lam = np.exp(home + att[hi] + de[ai])
+            lam = np.exp(home[gi] + att[hi] + de[ai])
             mu = np.exp(att[ai] + de[hi])
             # Poisson parts
             dlam = w * (hg - lam)  # d ll / d log(lam)
@@ -83,28 +87,31 @@ class DixonColes:
                          + np.where(m10, mu, 0) + np.where(m11, -1, 0)) / tau).sum()
             g_att = np.bincount(hi, dlam, n) + np.bincount(ai, dmu, n)
             g_de = np.bincount(ai, dlam, n) + np.bincount(hi, dmu, n)
-            g_home = dlam.sum()
-            g = -np.concatenate([g_att, g_de, [g_home, drho]])
+            g_home = np.bincount(gi, dlam, G)
+            g = -np.concatenate([g_att, g_de, g_home, [drho]])
             g[:n] += 2 * lam_t * (att - mu_att) + 20.0 * att.sum()
             g[n:2 * n] += 2 * lam_t * (de - mu_def)
             return g
 
-        x0 = np.concatenate([np.zeros(2 * n), [0.25, -0.05]])
-        bounds = [(-3, 3)] * (2 * n) + [(-1, 1), (-0.3, 0.3)]
+        x0 = np.concatenate([np.zeros(2 * n), np.full(G, 0.25), [-0.05]])
+        bounds = [(-3, 3)] * (2 * n) + [(-1, 1)] * G + [(-0.3, 0.3)]
         res = minimize(nll, x0, jac=grad, method="L-BFGS-B", bounds=bounds,
-                       options={"maxiter": 2000})
-        self.attack, self.defence, self.home_adv, self.rho = unpack(res.x)
+                       options={"maxiter": 3000})
+        self.attack, self.defence, homes, self.rho = unpack(res.x)
+        self.home_advs = np.array(homes, float)
+        self.home_adv = float(homes[0])  # domestic (group 0)
         self._idx = idx
         return self
 
-    def expected_goals(self, home_id, away_id):
+    def expected_goals(self, home_id, away_id, group=0, neutral=False):
         i, j = self._idx.get(home_id), self._idx.get(away_id)
         # unseen (e.g. newly promoted with no data): use a below-average prior
         a_h = self.attack[i] if i is not None else -0.25
         d_h = self.defence[i] if i is not None else 0.25
         a_a = self.attack[j] if j is not None else -0.25
         d_a = self.defence[j] if j is not None else 0.25
-        return float(np.exp(self.home_adv + a_h + d_a)), float(np.exp(a_a + d_h))
+        h = 0.0 if neutral else float(self.home_advs[min(group, len(self.home_advs) - 1)])
+        return float(np.exp(h + a_h + d_a)), float(np.exp(a_a + d_h))
 
     def score_matrix(self, lam, mu, max_goals=10):
         return score_matrix(lam, mu, self.rho, max_goals)

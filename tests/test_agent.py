@@ -377,3 +377,21 @@ def test_rate_limit_retry(monkeypatch, tmp_path):
     monkeypatch.setattr(af.time, "sleep", lambda s: None)
     assert api.get("fixtures", ttl=0, league=1) == [{"ok": 1}]
     assert len(calls) == 2
+
+
+def test_euro_only_team_starts_below_average(tmp_path):
+    """A team from an unloaded league that wins its 2 cup games shouldn't top the ratings."""
+    from agent.db import upsert_fixture
+    con, cfg = _pooled_world(tmp_path)
+    cfg["leagues"].append({"id": 848, "name": "Conference League", "europe": True, "pooled": True})
+    for k, opp in enumerate((205, 206)):
+        upsert_fixture(con, {"fixture": {"id": 99_000 + k, "date": f"2026-07-0{k + 1}T18:00:00+00:00",
+                                         "status": {"short": "FT"}},
+                             "league": {"id": 848, "season": 2026, "round": "Q1"},
+                             "teams": {"home": {"id": 900, "name": "Minnows"}, "away": {"id": opp, "name": "x"}},
+                             "goals": {"home": 3, "away": 0}})
+    con.commit()
+    lm = engine.train(con, cfg, 848, "2026-08-01T00:00:00+00:00")
+    att = lm.dc.attack[lm.dc._idx[900]]
+    strong = np.mean([lm.dc.attack[lm.dc._idx[100 + t]] for t in range(10)])
+    assert att < strong

@@ -96,9 +96,15 @@ def _train_pooled(con, cfg, league_id, as_of, lc) -> LeagueModel:
     ref = _parse(as_of)
     days = [(ref - _parse(r["kickoff"])).days for r in rows]
     groups = [1 if r["league_id"] in eu else 0 for r in rows]
+    # Teams seen only in European games come from leagues we don't load (usually weaker):
+    # start them below average, fading as their European matches accumulate.
+    domestic = {t for r, g in zip(rows, groups) if g == 0 for t in (r["home_id"], r["away_id"])}
+    euro_only = {t for r in rows for t in (r["home_id"], r["away_id"])} - domestic
     dc = DixonColes(half_life_days=mc["dc_half_life_days"], l2=mc["dc_l2"]).fit(
         [r["home_id"] for r in rows], [r["away_id"] for r in rows],
-        [r["home_goals"] for r in rows], [r["away_goals"] for r in rows], days, groups=groups)
+        [r["home_goals"] for r in rows], [r["away_goals"] for r in rows], days, groups=groups,
+        promoted=euro_only, prior_strength=mc.get("promoted_prior_strength", 6.0),
+        promoted_prior=tuple(mc.get("euro_only_prior", (-0.35, 0.35))))
 
     elo = Elo(k=mc["elo_k"], home_adv=mc["elo_home_adv"],
               season_regression=mc["elo_season_regression"])

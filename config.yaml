@@ -8,11 +8,11 @@ leagues:
   - {id: 106, name: Ekstraklasa}
   # Cross-league model: rated from every league below + all European cup games
   - {id: 2,   name: Champions League, europe: true, pooled: true, blend_weight_dc: 0.8}
+  - {id: 3,   name: Europa League, europe: true, pooled: true, blend_weight_dc: 0.8}
+  - {id: 848, name: Conference League, europe: true, pooled: true, blend_weight_dc: 0.8}
 
-# Loaded for the Champions League model only (not predicted or shown on the dashboard)
+# Loaded for the European cup models only (not predicted or shown on the dashboard)
 data_leagues:
-  - {id: 3,   name: Europa League, europe: true}
-  - {id: 848, name: Conference League, europe: true}
   - {id: 94,  name: Primeira Liga}
   - {id: 88,  name: Eredivisie}
   - {id: 144, name: Belgian Pro League}
@@ -29,6 +29,17 @@ data_leagues:
   - {id: 103, name: Eliteserien}
   - {id: 113, name: Allsvenskan}
   - {id: 318, name: Cypriot First Division}
+  - {id: 383, name: Israeli Premier League}
+  - {id: 271, name: Hungarian NB I}
+  - {id: 283, name: Romanian Liga I}
+  - {id: 332, name: Slovak Super Liga}
+  - {id: 373, name: Slovenian PrvaLiga}
+  - {id: 172, name: Bulgarian First League}
+  - {id: 389, name: Kazakhstan Premier League}
+  - {id: 419, name: Azerbaijan Premier League}
+  - {id: 244, name: Veikkausliiga}
+  - {id: 164, name: Icelandic Besta deild}
+  - {id: 357, name: League of Ireland Premier}
 
 # Seasons to train on (API-Football uses the start year, e.g. 2026 = 2026/27)
 history_seasons: [2024, 2025, 2026]
@@ -38,6 +49,7 @@ model:
   dc_half_life_days: 365        # time-decay for Dixon-Coles weights
   dc_l2: 0.05                   # shrinkage for teams with little data
   promoted_prior_strength: 6.0  # pull of newly promoted teams toward a below-average prior
+  euro_only_prior: [-0.35, 0.35] # cup teams from leagues we don't load start below average
   elo_k: 20
   elo_home_adv: 60
   elo_season_regression: 0.33   # pull ratings toward mean between seasons

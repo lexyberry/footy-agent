@@ -32,6 +32,7 @@ def ingest_fixtures(api, con, cfg, seasons=None):
             log.info("%s %s: %d fixtures (API: %s)", lg["name"], s, len(rows), api_name)
             if not rows:
                 log.warning("no fixtures for %s (id %s) season %s", lg["name"], lg["id"], s)
+            con.commit()  # keep progress if a later call fails
     con.commit()
     return n
 

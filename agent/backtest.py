@@ -69,6 +69,10 @@ def run_all(con, cfg, test_from: str, test_to: str, league_ids=None) -> dict:
         except Exception as e:  # noqa: BLE001  (e.g. too little data for a league)
             logging.getLogger(__name__).warning("backtest league %s failed: %s", lid, e)
             continue
+        if not r.get("n"):
+            logging.getLogger(__name__).warning("backtest league %s skipped: no finished matches "
+                                                "in %s..%s", lid, test_from, test_to)
+            continue
         if r.get("n"):
             r["league_name"] = names.get(lid, str(lid))
             r.pop("blend_grid_logloss", None)

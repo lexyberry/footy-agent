@@ -20,6 +20,8 @@ class ApiFootball:
         self.cache = Path(cache_dir)
         self.cache.mkdir(parents=True, exist_ok=True)
         self.calls = 0
+        self._last = 0.0
+        self.min_interval = 0.3   # ≤200 calls/min, under the per-minute plan limit
 
     def get(self, path: str, ttl: int = 3600, **params) -> list:
         """GET with cache. ttl=0 disables cache; ttl<0 caches forever (finished data)."""
@@ -33,16 +35,23 @@ class ApiFootball:
             q = dict(params)
             if page > 1:
                 q["page"] = page
-            for attempt in range(4):
+            for attempt in range(5):
+                wait = self.min_interval - (time.time() - self._last)
+                if wait > 0:
+                    time.sleep(wait)
                 r = self.s.get(f"{BASE}/{path}", params=q, timeout=30)
+                self._last = time.time()
                 self.calls += 1
                 if r.status_code == 429:
                     time.sleep(2 ** attempt * 5)
                     continue
                 r.raise_for_status()
+                body = r.json()
+                errs = body.get("errors")
+                if isinstance(errs, dict) and "rateLimit" in errs and attempt < 4:
+                    time.sleep(61)  # per-minute window; wait it out and retry
+                    continue
                 break
-            body = r.json()
-            errs = body.get("errors")
             if errs and errs != []:
                 raise RuntimeError(f"API-Football error on {path}: {errs}")
             out.extend(body.get("response", []))

@@ -358,3 +358,22 @@ def test_grouped_home_gradient():
         assert so.check_grad(cap["f"], cap["g"], x) < 1e-3
     finally:
         dc.minimize = orig
+
+
+def test_rate_limit_retry(monkeypatch, tmp_path):
+    from agent import api_football as af
+    bodies = [{"errors": {"rateLimit": "Too many requests"}, "response": []},
+              {"errors": [], "response": [{"ok": 1}], "paging": {"current": 1, "total": 1}}]
+    calls = []
+
+    class R:
+        status_code = 200
+        def __init__(self, b): self.b = b
+        def raise_for_status(self): pass
+        def json(self): return self.b
+
+    api = af.ApiFootball(key="k", cache_dir=str(tmp_path))
+    monkeypatch.setattr(api.s, "get", lambda *a, **k: calls.append(1) or R(bodies[len(calls) - 1]))
+    monkeypatch.setattr(af.time, "sleep", lambda s: None)
+    assert api.get("fixtures", ttl=0, league=1) == [{"ok": 1}]
+    assert len(calls) == 2
